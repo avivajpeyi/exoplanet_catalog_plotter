@@ -1,0 +1,5 @@
+src/data/confirmed_planets.csv
+*.ipynb
+*.DS_Store
+.ipynb_checkpoints
+__pycache__
