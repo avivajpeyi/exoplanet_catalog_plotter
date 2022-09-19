@@ -16,6 +16,7 @@ from matplotlib.ticker import ScalarFormatter
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle
 from scipy.optimize import curve_fit
+plt.rc('text.latex', preamble=r'\usepackage{mathabx}')
 
 R_SUN = 696342.0  # km
 T_SUN = 5788.0  # Kelvin
@@ -36,6 +37,7 @@ def set_matplotlib_style_settings(
 ):
     rcParams["font.size"] = 30
     rcParams["font.family"] = "serif"
+    rcParams["font.weight"] = "normal"
     rcParams["font.sans-serif"] = ["Computer Modern Sans"]
     rcParams["text.usetex"] = True
     rcParams["axes.labelsize"] = 30
@@ -63,6 +65,7 @@ def set_matplotlib_style_settings(
 
 def load_catalog():
     """
+    pl_name
     pl_ratror	Ratio of Planet to Stellar Radius
     pl_bmasse	Planet Mass or Mass*sin(i) [Earth Mass]
     pl_orbper	Orbital Period [days]
@@ -72,7 +75,9 @@ def load_catalog():
     st_lum	Stellar Luminosity [log(Solar)]
     st_rad	Stellar Radius [Solar Radius]
     st_teff	Stellar Effective Temperature [K]
-
+    disc_instrument Discovery Instrument
+     disc_facility Discovery Facility 
+     disc_telescope Discovery Telescope
 
     """
     cat = "data/confirmed_planets.csv"
@@ -81,8 +86,11 @@ def load_catalog():
     c = pd.read_csv(cat)
     c = c[
         [
+            "pl_name",
             "disc_year",
             "discoverymethod",
+            "disc_telescope",
+            "disc_facility",
             "pl_bmasse",
             "pl_rade",
             "pl_radeerr1",
@@ -101,17 +109,12 @@ def load_catalog():
             "pl_eqt",
         ]
     ]
+    c = squash_telescopes_categories(c)
     return c
 
 
-def load_planet_data():
-    d = pd.read_csv("data/planet_data.csv")
-    d.index = d.name
-    return d
-
-
 def add_subplot_letter(axes, inside=True, fs=25):
-    pos = (0.025, 0.9) if inside else (-0.2, 1.03)
+    pos = (0.025, 0.9) if inside else (-0.1, 1.03)
     for n, a in enumerate(axes):
         a.text(
             *pos,
@@ -127,17 +130,20 @@ def add_subplot_letter(axes, inside=True, fs=25):
 
 def get_year_counts(cat):
     cat = cat.copy()
-    data = cat.groupby("disc_year")["pl_bmasse"].nunique().to_dict()
+    data = cat.groupby("disc_year")["pl_name"].nunique().to_dict()
     data = {int(y): c for y, c in data.items()}
     min_y = min(data.keys())
     data[min_y - 1] = 0
     return data
 
 
+
+
+
 def get_method_percents(cat, summary=True):
     """Dict sorted in order of low to highest percent"""
     cat = cat.copy()
-    data = cat.groupby("discoverymethod")["pl_bmasse"].nunique().to_dict()
+    data = cat.groupby("discoverymethod")["pl_name"].nunique().to_dict()
     data = {m: n for m, n in data.items()}
     new_d = {}
     other = 0
@@ -156,7 +162,17 @@ def get_method_percents(cat, summary=True):
         new_d["Other"] = np.round(other, rnd)
 
     new_d = dict(sorted(new_d.items(), key=lambda item: item[1]))
+    
+    
     return new_d
+
+def get_telescope_percents(cat):
+    cat = cat.copy()
+    data = cat.groupby("disc_telescope")["pl_name"].nunique().to_dict()
+    total_p = sum(data.values())
+    data = {k: np.round(100 * (v / total_p), 1) for k, v in data.items()}
+    return data
+
 
 
 def squash_small_numeber_types(cat):
@@ -166,6 +182,21 @@ def squash_small_numeber_types(cat):
         if percent < 1.0:
             c.loc[c["discoverymethod"] == method, "discoverymethod"] = "Other"
     return c
+
+
+def get_year_counts_by_telescope(cat, summary=True):
+    c = cat.copy()
+    years = list(get_year_counts(c).keys())
+    telescopes = c.disc_telescope.unique()
+    tele_counts = {}
+    
+    for tel in telescopes:
+        sub = c[c["disc_telescope"] == tel]
+        year_counts = get_year_counts(sub)
+        tele_counts[tel] = {y: year_counts.get(y, 0) for y in years}
+    data = pd.DataFrame(tele_counts)
+    data = data.sort_index()
+    return data
 
 
 def get_year_counts_by_method(cat, summary=True):
@@ -185,6 +216,7 @@ def get_year_counts_by_method(cat, summary=True):
     return data
 
 
+
 def add_year_data_to_bar_plt(ax, year, order, df, label={}):
     d = df.loc[year].to_dict()
     d = {m: d[m] for m in order}
@@ -202,33 +234,48 @@ def add_year_data_to_bar_plt(ax, year, order, df, label={}):
 def plot_counts_per_year(summary=True):
     cat = load_catalog()
     set_matplotlib_style_settings(major=10, minor=5, linewidth=1.5)
-    fig, ax = plt.subplots(1, 1, figsize=(9, 5))
-    d = get_year_counts_by_method(cat, summary=summary)
-    years = d.index.values
+    fig, ax = plt.subplots(2, 1, figsize=(9, 8), sharex=True, sharey=True)
+    
+    
+    d_methods = get_year_counts_by_method(cat, summary=summary)
     perc = get_method_percents(cat, summary=summary)
-    order = list(perc.keys())
-    labels = {m: f"{m} ({p:.1f}\%)" for m, p in perc.items()}
+    meth_labels = {m: f"{m} ({p:.1f}\%)" for m, p in perc.items()}
+    meth_order = ["Imaging", "Other", "Microlensing", "Transit", "Radial Velocity"]
+    m_kwgs = dict(order=meth_order, df=d_methods)
+
+    d_telescopes = get_year_counts_by_telescope(cat)
+    perc = get_telescope_percents(cat)
+    tel_labels = {k:f"{k} ({p:.1f}\%)" for k, p in perc.items()}
+    tel_order = ['TESS', "Kepler", "Other"]
+    t_kwgs = dict(order=tel_order, df=d_telescopes)
+    
+    years = d_methods.index.values
 
     for i, y in enumerate(years):
-        label = {} if i < len(d) - 1 else labels
-        add_year_data_to_bar_plt(ax, y, order, d, label)
+        if i==len(years)-1:
+            m_kwgs.update(label=meth_labels)
+            t_kwgs.update(label=tel_labels)
+        add_year_data_to_bar_plt(ax[1], y, **m_kwgs)
+        add_year_data_to_bar_plt(ax[0], y, **t_kwgs)
 
-    ax.set_xlim(1987, 2023)
-    ax.set_ylim(0.5, 600)
-    ax.set_yscale("log")
-    plt.legend()
-    plt.ylabel("Number of Planets")
+    ax[0].set_xlim(1987, 2023)
+    ax[0].set_ylim(0.5, 600)
+    ax[0].set_yscale("log")
+    for a in ax:
+        a.legend(frameon=False, fontsize=15)
+        a.set_ylabel("\# Planets")
     plt.xlabel("Year")
     plt.yscale("log")
-    plt.legend(frameon=False, fontsize=15)
+
     plt.xlim(min(years), max(years))
-    plt.ylim(0.5, 600)
+    plt.ylim(0.5, 2000)
     ax = plt.gca()
     ax.yaxis.set_major_formatter(ticker.ScalarFormatter())
-    ax.yaxis.set_ticks([1, 10, 100, 500])
-    plt.tick_params(top=False)
+    ax.yaxis.set_ticks([1, 10, 100, 1000])
     plt.tight_layout()
+    plt.subplots_adjust(wspace=0, hspace=0)
     plt.savefig("confirmed_planets_vs_time.png", dpi=300)
+
 
 
 #####
@@ -239,8 +286,8 @@ def plot_counts_per_year(summary=True):
 def plot_radii_hist(ax):
     c = load_catalog()
     rcParams["xtick.top"] = False
-    ss_radii = load_planet_data()["radius"].to_dict()
-    ss_radii = {k: ss_radii[k] for k in ["Earth", "Neptune", "Jupiter"]}
+    ss_stats = load_planet_data()
+    ss_radii = {k: ss_stats[k]['radius'] for k in ["Earth", "Neptune", "Jupiter"]}
     ss_radii_inv = {v: k for k, v in ss_radii.items()}
 
     c = c[c["pl_orbper"] < 100]
@@ -391,24 +438,33 @@ def plot_radius_mass_relation_plot(ax):
     ax.annotate("$R\\sim M^{0.28}$\nRocky\nPlanets", xy=(0.25, 1.5), **kw)
     ax.annotate("$R\\sim M^{0.59}$\nNeptunian\nPlanets", xy=(14, 0.35), **kw)
     ax.annotate("$R\\sim M^{-0.04}$\nJovian\nPlanets", xy=(2000, 1), **kw)
-    pdata = load_planet_data().T.to_dict()
+    
+    
+    
+    pdata = load_planet_data()
     for p in ["Earth", "Mercury", "Jupiter", "Neptune"]:
-        pM, pR = pdata[p]["mass"], pdata[p]["radius"]
-        ax.scatter(pM, pR, color=PLANET_COLORS[p], s=50, marker="o", zorder=100)
-
-
-def make_radii_and_mass_plots():
-    fig, ax = plt.subplots(1, 2, figsize=(13, 5))
-    plot_radius_mass_relation_plot(ax[0])
-    plot_radii_hist(ax[1])
-    add_subplot_letter(ax)
-    plt.tight_layout()
-    plt.savefig("radii_and_mass_relations.png")
+        pdat = pdata[p]["mass"], pdata[p]["radius"], pdata[p]["symbol"]
+        scatter_with_symbol(ax, *pdat, col=PLANET_COLORS[p])
 
 
 #####
 
 ####
+
+def squash_telescopes_categories(cat):
+    c = cat.copy()
+    telescopes = c.groupby("disc_telescope")["pl_name"].nunique().to_dict()
+    init_len = len(telescopes)
+    telescopes = {tel:"Other" for tel in telescopes.keys()}
+    telescopes.update({
+        '0.1 m TESS Telescope': "TESS",
+        '0.95 m Kepler Telescope': "Kepler"
+    })
+    for key, new_key in telescopes.items():
+        c.loc[c["disc_telescope"] == key, "disc_telescope"] = new_key
+    new_len = len(c.groupby("disc_telescope")["pl_name"].nunique().to_dict())
+#     print(f"Squashing telescope categories from {init_len}-->{new_len}")
+    return c
 
 
 def mass_to_lumin_for_main_sequence(m):
@@ -462,70 +518,6 @@ def check_if_inside(data_x, data_y, x1, y1, x2, y2):
     return c1 & c2
 
 
-def plot_habitable_zone(ax):
-    cat = load_catalog()
-    inner = pd.read_csv("data/hz_inner.csv").sort_values(by="mass")
-    outer = pd.read_csv("data/hz_outer.csv")
-
-    inner_x, inner_y = smooth_xydata(inner.mass, inner.dist, 0.23)
-    outer_x, outer_y = smooth_xydata(outer.mass, outer.dist, 1.2)
-
-    c = "mediumaquamarine"
-    ax.fill(
-        np.append(inner_x, outer_x[::-1]),
-        np.append(inner_y, outer_y[::-1]),
-        color=c,
-        alpha=0.75,
-        label="Habitable Zone",
-    )
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-
-    # glow effect
-    n_lines = 20
-    diff_linewidth = 1.05
-    alpha_value = 0.03
-    for n in range(1, n_lines + 1):
-        kwgs = dict(linewidth=2 + (diff_linewidth * n), alpha=alpha_value, color=c)
-        ax.plot(inner_x, inner_y, **kwgs)
-        ax.plot(outer_x, outer_y, **kwgs)
-
-    ss_stats = load_planet_data()
-    ss_distances = ss_stats.to_dict()["distance"]
-    ss_distances = {
-        k: ss_distances[k] for k in ["Mercury", "Earth", "Neptune", "Jupiter"]
-    }
-
-    cat_x, cat_y = cat.pl_orbsmax.values, cat.st_mass.values
-    inside = check_if_inside(cat_x, cat_y, inner_x, inner_y, outer_x, outer_y)
-    in_x, in_y = cat_x[inside], cat_y[inside]
-
-    ax.scatter(cat_x, cat_y, alpha=0.25, s=0.1, color="k")
-    ax.scatter(
-        in_x,
-        in_y,
-        s=10,
-        alpha=1.0,
-        color="k",
-        zorder=10,
-        marker=".",
-        label="Exoplanets",
-    )
-
-    ax.set_xlim(0.01, 10)
-    ax.set_ylim(min(inner_y), max(outer_y))
-    ax.set_xlabel("Distance from Star [Au]")
-    ax.set_ylabel("Star Mass [$M_{\odot}$]")
-    ax.tick_params(axis="x", pad=10, top=True)
-    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: "{:g}".format(y)))
-    ax.set_yticks([0.2, 0.5, 1])
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: "{:g}".format(y)))
-    for i, (n, d) in enumerate(ss_distances.items()):
-        ax.scatter(d, 1, s=50, label=n, c=PLANET_COLORS[n], zorder=20, marker="o")
-
-    ax.legend(frameon=False, fontsize=14, markerscale=2)
-
-
 def read_planet_category_ranges():
     d = pd.read_csv("data/planet_categories.csv")
     data = {}
@@ -546,6 +538,11 @@ def add_rectangles(ax, data, colors):
         )
         ax.add_collection(pc)
 
+        
+def scatter_with_symbol(ax, x, y, symb, col, zord=200, ss=175, sm=250):
+    ax.scatter(x,y, marker='o', s=sm, c=col, alpha=0.9, zorder=zord-1, linewidth=0.0)
+    ax.scatter(x, y, marker=symb, s=ss, c='black', alpha=1, zorder=zord, linewidth=0.0)
+
 
 def plot_mass_period_diagram(ax):
     ZONES = {
@@ -563,10 +560,11 @@ def plot_mass_period_diagram(ax):
     planet_colors = [ZONES[k][-1] for k in planet_corners.keys()]
     add_rectangles(ax, planet_corners, planet_colors)
 
-    ss_data = load_planet_data().T.to_dict()
+    ss_data = load_planet_data()
     for k in ["Jupiter", "Neptune", "Earth", "Mercury"]:
-        pT, pM = ss_data[k]["period"], ss_data[k]["mass"]
-        ax.scatter(pT, pM, color=PLANET_COLORS[k], marker="o", s=50)
+        planet_data = ss_data[k]["period"], ss_data[k]["mass"], ss_data[k]["symbol"] 
+        scatter_with_symbol(ax, *planet_data, col=PLANET_COLORS[k])
+        
 
     fs = 14
     kw = dict(
@@ -576,6 +574,7 @@ def plot_mass_period_diagram(ax):
         fontsize=fs,
         color="black",
         fontweight="extra bold",
+        zorder=1000
     )
     for n, d in ZONES.items():
         bbox = dict(fc=d[1], lw=0)
@@ -595,26 +594,116 @@ def plot_mass_period_diagram(ax):
     ax.set_xlabel("Period [days]")
     ax.set_ylabel("Mass [$M_{\oplus}$]")
 
+    
 
+
+def make_radii_and_mass_plots():
+    fig, ax = plt.subplots(1, 2, figsize=(13, 5))
+    plot_radius_mass_relation_plot(ax[0])
+    plot_habitable_zone(ax[1])
+    add_subplot_letter(ax)
+    plt.tight_layout()
+    plt.savefig("radii_and_mass_relations.png", dpi=300)
+
+    
 def make_categories_plot():
     set_matplotlib_style_settings(
         major=7, minor=4, linewidth=1.5, grid=False, topon=True, righton=True
     )
     fig, ax = plt.subplots(1, 2, figsize=(13, 6))
     plot_mass_period_diagram(ax[0])
-    plot_habitable_zone(ax[1])
+    plot_radii_hist(ax[1])
     add_subplot_letter(ax, inside=False)
     plt.tight_layout()
     plt.savefig("scatter_categories.png", dpi=300)
+    
 
-
-# -
-
-# # Plots
-
-plot_counts_per_year(True)
+cat = load_catalog()
+print(f"Number of exoplanets: {len(cat)}")
+plot_counts_per_year(summary=True)
 make_categories_plot()
 make_radii_and_mass_plots()
+
+
+# +
+
+
+def plot_habitable_zone(ax):
+    cat = load_catalog()
+    inner = pd.read_csv("data/hz_inner.csv").sort_values(by="mass")
+    outer = pd.read_csv("data/hz_outer.csv")
+    inner.dist = inner.dist * 1.08
+#     inner_x, inner_y = smooth_xydata(inner.mass, inner.dist, 0.23)
+#     outer_x, outer_y = smooth_xydata(outer.mass, outer.dist, 1.2)
+    inner_x, inner_y = inner.mass, inner.dist
+    outer_x, outer_y = outer.mass, outer.dist
+
+    
+    c = "mediumaquamarine"
+    ax.fill(
+        np.append(inner_x, outer_x[::-1]),
+        np.append(inner_y, outer_y[::-1]),
+        color=c,
+        alpha=0.75,
+        label="Habitable Zone",
+    )
+    ax.set_xscale("log")
+#     ax.set_yscale("log")
+
+    # glow effect
+    n_lines = 20
+    diff_linewidth = 1.05
+    alpha_value = 0.03
+    for n in range(1, n_lines + 1):
+        kwgs = dict(linewidth=2 + (diff_linewidth * n), alpha=alpha_value, color=c)
+        ax.plot(inner_x, inner_y, **kwgs)
+        ax.plot(outer_x, outer_y, **kwgs)
+
+    # plot exoplanets
+    cat_x, cat_y = cat.pl_orbsmax.values, cat.st_mass.values
+    inside = check_if_inside(cat_x, cat_y, inner_x, inner_y, outer_x, outer_y)
+    print(sum(inside))
+    in_x, in_y = cat_x[inside], cat_y[inside]
+    ax.scatter(cat_x, cat_y, alpha=0.25, s=0.1, color="k")
+    ax.scatter(
+        in_x,
+        in_y,
+        s=10,
+        alpha=1.0,
+        color="k",
+        zorder=10,
+        marker=".",
+        label="Exoplanets",
+    )
+
+    # plot solar sys planets
+    ss_stats = load_planet_data()
+    plt_planets = ["Mercury", "Earth", "Neptune", "Jupiter"]
+    for k in plt_planets:
+        planet_data = ss_stats[k]["distance"], 1, ss_stats[k]["symbol"] 
+        scatter_with_symbol(ax, *planet_data, col=PLANET_COLORS[k])
+    
+    ax.set_xlim(0.01, 45)
+    ax.set_ylim(min(inner_y), max(outer_y))
+    ax.set_xlabel("Distance from Star [Au]")
+    ax.set_ylabel("Star Mass [$M_{\odot}$]")
+    ax.tick_params(axis="x", pad=10, top=True)
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: "{:g}".format(y)))
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: "{:g}".format(y)))
+
+#     ax.yaxis.set_minor_locator(ticker.FixedLocator([0.2, 0.6, 1]))
+#     ax.yaxis.set_major_locator(ticker.NullLocator())
+
+#     ax.yaxis.set_minor_formatter(ticker.ScalarFormatter())
+
+    ax.set_yticks([.2,.6,1])
+    ax.legend(frameon=False, fontsize=14, markerscale=2)
+
+
+
+fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+plot_habitable_zone(ax)
+# -
 
 # # Notes
 #
@@ -648,3 +737,5 @@ make_radii_and_mass_plots()
 # ### Habitable Zone
 #
 # https://arxiv.org/pdf/1301.6674.pdf
+
+
